@@ -84,13 +84,15 @@ Routes based on the inference method. Set a default provider and optionally over
 ```php
 use NeuronAI\Router\Rules\MethodRule;
 
+$router = RouterProvider::make()->addProvider(...);
+
 // Use Anthropic for everything, except structured output which goes to OpenAI
-->setRule(
+$router->setRule(
     new MethodRule('anthropic')->structured('openai')
 )
 
 // Override each method individually
-->setRule(
+$router->setRule(
     new MethodRule('openai')
         ->chat('anthropic')
         ->stream('anthropic')
@@ -106,7 +108,7 @@ Wraps a callable for maximum flexibility. Use this when you need to inspect mess
 use NeuronAI\Router\Rules\CallbackRule;
 
 // Route based on tools presence
-->setRule(new CallbackRule(function (string $method, array $messages, array $tools): string {
+$router->setRule(new CallbackRule(function (string $method, array $messages, array $tools): string {
     if (count($tools) > 0) {
         return 'anthropic';
     }
@@ -122,7 +124,7 @@ Distributes requests evenly across providers in sequence. Each call cycles to th
 use NeuronAI\Router\Rules\RoundRobinRule;
 
 // Alternate between Anthropic and OpenAI for each request
-->setRule(
+$router->setRule(
     new RoundRobinRule(['anthropic', 'openai'])
 )
 ```
@@ -135,7 +137,7 @@ Routes based on the content blocks inside messages (images, files, audio, video)
 use NeuronAI\Router\Rules\ContentRule;
 
 // Use Anthropic by default, route images and video to Gemini, files to OpenAI
-->setRule(
+$router->setRule(
     new ContentRule('anthropic')
         ->image('gemini')
         ->video('gemini')
@@ -176,7 +178,7 @@ class ImageAwareRule implements RoutingRuleInterface
 Then use it:
 
 ```php
-->setRule(
+$router->setRule(
     new ImageAwareRule(
         defaultProvider: 'anthropic',
         imageProvider: 'gemini',

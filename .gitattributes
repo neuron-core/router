@@ -17,3 +17,4 @@ tests export-ignore
 tests/** export-ignore
 **/AGENTS.md export-ignore
 CLAUDE.md export-ignore
+assets/** export-ignore

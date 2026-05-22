@@ -1,6 +1,7 @@
 # Neuron AI Router
 
-The RouterProvider is a proxy that implements `AIProviderInterface` and routes inference calls (`chat`, `stream`, `structured`) to different underlying providers based on a routing strategy you define. The agent doesn't know it's talking to a router — it's a drop-in replacement for any provider.
+This package provides you with a `RouterProvider` component. It is a proxy that implements `AIProviderInterface` and routes inference calls (`chat`, `stream`, `structured`) to different underlying providers based on a routing strategy you define.
+The agent doesn't know it's talking to a router — it's a drop-in replacement for any Neuron AI provider.
 
 ![](/assets/neuron-router.png)
 
@@ -13,10 +14,10 @@ The RouterProvider is a proxy that implements `AIProviderInterface` and routes i
 
 ## Installation
 
-No additional dependencies required. The RouterProvider is part of the `neuron-core/neuron-ai` package.
+Install the composer package:
 
-```php
-use NeuronAI\Router\RouterProvider;
+```
+composer require neuron-ai/router
 ```
 
 ## Quick Start
@@ -27,20 +28,30 @@ use NeuronAI\Router\Rules\MethodRule;
 use NeuronAI\Providers\Anthropic\Anthropic;
 use NeuronAI\Providers\OpenAI\OpenAI;
 
-$router = RouterProvider::make()
-    ->addProvider('anthropic', new Anthropic(
-        key: 'ANTHROPIC_API_KEY',
-        model: 'claude-sonnet-4-20250514',
-    ))
-    ->addProvider('openai', new OpenAI(
-        key: 'OPENAI_API_KEY',
-        model: 'gpt-4o',
-    ))
-    ->setRule(
-        new MethodRule('anthropic')->structured('openai')
-    );
+class MyAgent extens Agent
+{
+    protected function provider(): AIProviderInterface
+    {
+        return RouterProvider::make()
+            ->addProvider('anthropic', new Anthropic(
+                key: 'ANTHROPIC_API_KEY',
+                model: 'claude-sonnet-4-20250514',
+            ))
+            ->addProvider('openai', new OpenAI(
+                key: 'OPENAI_API_KEY',
+                model: 'gpt-4o',
+            ))
+            ->setRule(
+                new RoundRobinRule(['anthropic', 'openai'])
+            );
+    }
 
-$agent->setAiProvider($router);
+    protected function instructions(): string
+    {...}
+
+    protected function tools(): array
+    {...}
+}
 ```
 
 ## How It Works

@@ -1,7 +1,7 @@
 # Neuron AI Router
 
 This package provides you with a `RouterProvider` component. It is a proxy that implements `AIProviderInterface` and routes inference calls (`chat`, `stream`, `structured`) to different underlying providers based on a routing strategy you define.
-The agent doesn't know it's talking to a router — it's a drop-in replacement for any Neuron AI provider.
+The agent doesn't know it's talking to a router, it's a drop-in replacement for any Neuron AI provider.
 
 This is possible thanks to the Unified Messaging Layer that Neuron AI provides, with full support for multi-modality. Documentation here: https://docs.neuron-ai.dev/agent/messages
 

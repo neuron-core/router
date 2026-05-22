@@ -56,20 +56,6 @@ class MyAgent extens Agent
 }
 ```
 
-## How It Works
-
-The router intercepts the fluent chain that agents use to call providers:
-
-```php
-$provider->systemPrompt($instructions)->setTools($tools)->chat(...$messages);
-```
-
-It buffers `systemPrompt()` and `setTools()`, then when the terminal method (`chat`, `stream`, or `structured`) is called, it:
-
-1. Invokes the routing rule to pick a provider by name
-2. Configures the chosen provider with the buffered system prompt and tools
-3. Delegates the call and returns the result unchanged
-
 ## Routing Rules
 
 Routing logic is defined via the `RoutingRuleInterface`. The router calls `resolveProvider()` on the rule, passing context about the current request:

@@ -1,0 +1,65 @@
+{
+    "name": "neuron-core/router",
+    "description": "Route inference calls to different underlying providers based on a routing strategy you define.",
+    "minimum-stability": "stable",
+    "authors": [
+        {
+            "name": "Valerio Barbera",
+            "email": "valerio@inspector.dev"
+        }
+    ],
+    "license": "MIT",
+    "require": {
+        "php": "^8.1",
+		"neuron-core/neuron-ai": "^3.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.75",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^10.0",
+        "rector/rector": "^2.0",
+        "tomasvotruba/type-coverage": "^2.0"
+    },
+    "scripts": {
+        "analyse": [
+            "vendor/bin/phpstan analyse --memory-limit=1G -v"
+        ],
+        "format": [
+            "@refactor",
+            "@style"
+        ],
+        "style": [
+            "php-cs-fixer fix --allow-risky=yes"
+        ],
+        "refactor": [
+            "vendor/bin/rector"
+        ],
+        "test": [
+            "vendor/bin/phpunit --colors=always"
+        ]
+    },
+    "scripts-descriptions": {
+        "analyse": "Run PHPStan static analysis.",
+        "format": "Run PHP CS Fixer and PHPStan in a pipeline.",
+        "style": "Run PHP CS Fixer to fix coding style issues.",
+        "refactor": "Run rector for code refactoring.",
+        "test": "Run PHPUnit to test"
+    },
+    "autoload": {
+        "psr-4": {
+            "NeuronAI\\Router\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "NeuronAI\\Router\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "php-http/discovery": true
+        },
+        "process-timeout": 600
+    }
+}

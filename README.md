@@ -2,9 +2,7 @@
 
 The RouterProvider is a proxy that implements `AIProviderInterface` and routes inference calls (`chat`, `stream`, `structured`) to different underlying providers based on a routing strategy you define. The agent doesn't know it's talking to a router — it's a drop-in replacement for any provider.
 
-<div style="text-align: center; width: 200px;">
-<img src="/assets/neuron-router.png" alt="Neuron AI Router"/>
-</div>
+<img src="/assets/neuron-router.png" alt="Neuron AI Router" width=50%/>
 
 ## When to Use It
 

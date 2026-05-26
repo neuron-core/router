@@ -35,6 +35,8 @@ class RouterProvider implements AIProviderInterface
 
     protected ?string $systemPrompt = null;
 
+    protected ?AIProviderInterface $resolvedProvider = null;
+
     /**
      * @var array<ToolInterface>
      */
@@ -49,6 +51,20 @@ class RouterProvider implements AIProviderInterface
     public function setRule(RoutingRuleInterface $rule): self
     {
         $this->rule = $rule;
+        return $this;
+    }
+
+    /**
+     * @throws ProviderException
+     */
+    public function setDefaultProvider(string $name): self
+    {
+        if (!isset($this->providers[$name])) {
+            throw new ProviderException(
+                "RouterProvider: unknown provider '{$name}'. Available: " . implode(', ', array_keys($this->providers)),
+            );
+        }
+        $this->resolvedProvider = $this->providers[$name];
         return $this;
     }
 
@@ -109,18 +125,30 @@ class RouterProvider implements AIProviderInterface
             ->structured($messages, $class, $response_schema);
     }
 
+    /**
+     * @throws ProviderException
+     */
     public function messageMapper(): MessageMapperInterface
     {
-        throw new ProviderException(
-            'RouterProvider does not provide a message mapper. The underlying provider handles message mapping.',
-        );
+        if ($this->resolvedProvider === null) {
+            throw new ProviderException(
+                'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
+            );
+        }
+        return $this->resolvedProvider->messageMapper();
     }
 
+    /**
+     * @throws ProviderException
+     */
     public function toolPayloadMapper(): ToolMapperInterface
     {
-        throw new ProviderException(
-            'RouterProvider does not provide a tool payload mapper. The underlying provider handles tool payload mapping.',
-        );
+        if ($this->resolvedProvider === null) {
+            throw new ProviderException(
+                'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
+            );
+        }
+        return $this->resolvedProvider->toolPayloadMapper();
     }
 
     public function setHttpClient(HttpClientInterface $client): AIProviderInterface
@@ -158,6 +186,6 @@ class RouterProvider implements AIProviderInterface
             );
         }
 
-        return $this->providers[$name];
+        return $this->resolvedProvider = $this->providers[$name];
     }
 }

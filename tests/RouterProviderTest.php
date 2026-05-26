@@ -14,6 +14,7 @@ use NeuronAI\Chat\Messages\UserMessage;
 use NeuronAI\Exceptions\ProviderException;
 use NeuronAI\HttpClient\HttpClientInterface;
 use NeuronAI\Providers\AIProviderInterface;
+use NeuronAI\Providers\MessageMapperInterface;
 use NeuronAI\Router\Rules\CallbackRule;
 use NeuronAI\Router\Rules\ContentRule;
 use NeuronAI\Router\Rules\MethodRule;
@@ -229,26 +230,92 @@ class RouterProviderTest extends TestCase
         $router->chat(UserMessage::make('hello'));
     }
 
-    public function test_message_mapper_throws(): void
+    public function test_message_mapper_delegates_to_last_resolved_provider(): void
     {
+        $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
+
         $router = RouterProvider::make()
-            ->addProvider('main', FakeAIProvider::make(AssistantMessage::make('ok')))
+            ->addProvider('main', $fake)
             ->setRule(new CallbackRule(fn (): string => 'main'));
 
-        $this->expectException(ProviderException::class);
-        $this->expectExceptionMessage('message mapper');
-        $router->messageMapper();
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hello'));
+
+        $this->assertInstanceOf(\NeuronAI\Testing\FakeMessageMapper::class, $router->messageMapper());
     }
 
-    public function test_tool_payload_mapper_throws(): void
+    public function test_tool_payload_mapper_delegates_to_last_resolved_provider(): void
     {
+        $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
+
         $router = RouterProvider::make()
-            ->addProvider('main', FakeAIProvider::make(AssistantMessage::make('ok')))
+            ->addProvider('main', $fake)
             ->setRule(new CallbackRule(fn (): string => 'main'));
 
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hello'));
+
+        $this->assertInstanceOf(\NeuronAI\Testing\FakeToolMapper::class, $router->toolPayloadMapper());
+    }
+
+    public function test_mapper_uses_default_provider_before_any_call(): void
+    {
+        $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
+
+        $router = RouterProvider::make()
+            ->addProvider('main', $fake)
+            ->setDefaultProvider('main');
+
+        $this->assertInstanceOf(\NeuronAI\Testing\FakeMessageMapper::class, $router->messageMapper());
+        $this->assertInstanceOf(\NeuronAI\Testing\FakeToolMapper::class, $router->toolPayloadMapper());
+    }
+
+    public function test_default_provider_overwritten_by_routing(): void
+    {
+        $mapperA = $this->createMock(MessageMapperInterface::class);
+        $mapperB = $this->createMock(MessageMapperInterface::class);
+
+        $providerA = $this->createMock(AIProviderInterface::class);
+        $providerA->method('messageMapper')->willReturn($mapperA);
+        $providerA->method('systemPrompt')->willReturnSelf();
+        $providerA->method('setTools')->willReturnSelf();
+        $providerA->method('chat')->willReturn(AssistantMessage::make('a'));
+
+        $providerB = $this->createMock(AIProviderInterface::class);
+        $providerB->method('messageMapper')->willReturn($mapperB);
+        $providerB->method('systemPrompt')->willReturnSelf();
+        $providerB->method('setTools')->willReturnSelf();
+        $providerB->method('chat')->willReturn(AssistantMessage::make('b'));
+
+        $router = RouterProvider::make()
+            ->addProvider('a', $providerA)
+            ->addProvider('b', $providerB)
+            ->setDefaultProvider('a')
+            ->setRule(new CallbackRule(fn (): string => 'b'));
+
+        $this->assertSame($mapperA, $router->messageMapper());
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hello'));
+
+        $this->assertSame($mapperB, $router->messageMapper());
+    }
+
+    public function test_set_default_provider_throws_for_unknown_name(): void
+    {
+        $router = RouterProvider::make()
+            ->addProvider('main', FakeAIProvider::make(AssistantMessage::make('ok')));
+
         $this->expectException(ProviderException::class);
-        $this->expectExceptionMessage('tool payload mapper');
-        $router->toolPayloadMapper();
+        $this->expectExceptionMessage("unknown provider 'unknown'");
+        $router->setDefaultProvider('unknown');
+    }
+
+    public function test_mapper_throws_when_no_default_and_no_resolution(): void
+    {
+        $router = RouterProvider::make()
+            ->addProvider('main', FakeAIProvider::make(AssistantMessage::make('ok')));
+
+        $this->expectException(ProviderException::class);
+        $this->expectExceptionMessage('no provider available for delegation');
+        $router->messageMapper();
     }
 
     // --- Interface compliance ---

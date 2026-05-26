@@ -211,6 +211,20 @@ class MyAgent extends Agent
 }
 ```
 
+## Default Provider
+
+The router delegates `messageMapper()` and `toolPayloadMapper()` to an underlying provider. After each inference call, these delegate to whichever provider the routing rule selected. If you need the mappers available before any inference call (e.g., during agent bootstrapping), set a default:
+
+```php
+RouterProvider::make()
+    ->addProvider('anthropic', new Anthropic(...))
+    ->addProvider('openai', new OpenAI(...))
+    ->setDefaultProvider('anthropic')
+    ->setRule(new RoundRobinRule(['anthropic', 'openai']));
+```
+
+The default is overwritten each time the routing rule resolves a provider, so it only acts as the initial fallback.
+
 ## Error Handling
 
 The router throws `ProviderException` with clear messages for misconfiguration:
@@ -220,9 +234,11 @@ The router throws `ProviderException` with clear messages for misconfiguration:
 | No routing rule set | `no routing strategy configured. Call setRule() to set one.` |
 | No providers registered | `no providers registered. Call addProvider() to add one.` |
 | Rule returns unknown name | `unknown provider 'name'. Available: ...` |
+| Unknown default provider | `unknown provider 'name'. Available: ...` |
+| Mapper called with no default or prior call | `no provider available for delegation. Call setDefaultProvider() or make an inference call first.` |
 
 ## Limitations
 
-- `messageMapper()` and `toolPayloadMapper()` throw — these are internal to each concrete provider and are never called by the agent directly.
+- `messageMapper()` and `toolPayloadMapper()` delegate to the last-resolved provider (or the default). These are internal to each concrete provider and are never called by the agent directly.
 - `setHttpClient()` is forwarded to **all** registered providers.
 - The routing rule is called on every inference request, so keep it fast.

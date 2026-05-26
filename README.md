@@ -56,6 +56,20 @@ class MyAgent extens Agent
 }
 ```
 
+## Default Provider
+
+The router delegates `messageMapper()` and `toolPayloadMapper()` to an underlying provider. After each inference call, these delegate to whichever provider the routing rule selected. If you need the mappers available before any inference call (e.g., during agent bootstrapping), set a default:
+
+```php
+RouterProvider::make()
+    ->addProvider('anthropic', new Anthropic(...))
+    ->addProvider('openai', new OpenAI(...))
+    ->setDefaultProvider('anthropic')
+    ->setRule(new RoundRobinRule(['anthropic', 'openai']));
+```
+
+The default is overwritten each time the routing rule resolves a provider, so it only acts as the initial fallback.
+
 ## Routing Rules
 
 Routing logic is defined via the `RoutingRuleInterface`. The router calls `resolveProvider()` on the rule, passing context about the current request:
@@ -210,20 +224,6 @@ class MyAgent extends Agent
     }
 }
 ```
-
-## Default Provider
-
-The router delegates `messageMapper()` and `toolPayloadMapper()` to an underlying provider. After each inference call, these delegate to whichever provider the routing rule selected. If you need the mappers available before any inference call (e.g., during agent bootstrapping), set a default:
-
-```php
-RouterProvider::make()
-    ->addProvider('anthropic', new Anthropic(...))
-    ->addProvider('openai', new OpenAI(...))
-    ->setDefaultProvider('anthropic')
-    ->setRule(new RoundRobinRule(['anthropic', 'openai']));
-```
-
-The default is overwritten each time the routing rule resolves a provider, so it only acts as the initial fallback.
 
 ## Error Handling
 

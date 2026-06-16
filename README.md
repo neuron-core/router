@@ -156,20 +156,27 @@ Routes by the difficulty of the conversation, using the [Neuron Classifier](http
 use NeuronAI\Router\Rules\DifficultyRule;
 use NeuronCore\Classifier\Classifier;
 
-// Load the model ONCE (e.g. on app boot or under a long-lived worker).
-$scorer = Classifier::load('storage/model.bin');
 
-$router = RouterProvider::make()
-    ->addProvider('mini', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o-mini'))
-    ->addProvider('4o', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o'))
-    ->addProvider('o1', new OpenAI(key: 'OPENAI_API_KEY', model: 'o1'))
-    ->setRule(
-        (new DifficultyRule($scorer))
-            ->outOfDomain('o1', coverage: 0.4) // unfamiliar prompt → most capable
-            ->easy('mini', maxScore: 0.33)     // overall() < 0.33 → cheap & fast
-            ->medium('4o', maxScore: 0.70)     // overall() < 0.70 → solid all-rounder
-            ->hard('o1')                       // otherwise → most capable
-    );
+class MyAgent extens Agent
+{
+    protected function provider(): AIProviderInterface
+    {
+        // Load the classifier ONCE (e.g. on app boot or under a long-lived worker).
+        $scorer = Classifier::load('storage/model.bin');
+
+        return RouterProvider::make()
+            ->addProvider('mini', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o-mini'))
+            ->addProvider('4o', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o'))
+            ->addProvider('o1', new OpenAI(key: 'OPENAI_API_KEY', model: 'o1'))
+            ->setRule(
+                (new DifficultyRule($scorer))
+                    ->outOfDomain('o1', coverage: 0.4) // unfamiliar prompt → most capable
+                    ->easy('mini', maxScore: 0.33)     // overall() < 0.33 → cheap & fast
+                    ->medium('4o', maxScore: 0.70)     // overall() < 0.70 → solid all-rounder
+                    ->hard('o1')                       // otherwise → most capable
+            );
+    }
+}
 ```
 
 Resolution order on the first user message:

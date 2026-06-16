@@ -143,6 +143,44 @@ $router->setRule(
 )
 ```
 
+#### DifficultyRule
+
+Routes by the difficulty of the conversation, using the [Neuron Classifier](https://github.com/neuron-core/classifier) package. It classifies the **first user message** and then **sticks to that provider** for every subsequent message in the same conversation — the whole thread is served by the model the opening prompt was routed to.
+
+> The classifier is an **optional** dependency. Install it only if you use this rule:
+> ```
+> composer require neuron-core/classifier
+> ```
+
+```php
+use NeuronAI\Router\Rules\DifficultyRule;
+use NeuronCore\Classifier\Classifier;
+
+// Load the model ONCE (e.g. on app boot or under a long-lived worker).
+$scorer = Classifier::load('storage/model.bin');
+
+$router = RouterProvider::make()
+    ->addProvider('mini', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o-mini'))
+    ->addProvider('4o', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o'))
+    ->addProvider('o1', new OpenAI(key: 'OPENAI_API_KEY', model: 'o1'))
+    ->setRule(
+        (new DifficultyRule($scorer))
+            ->outOfDomain('o1', coverage: 0.4) // unfamiliar prompt → most capable
+            ->easy('mini', maxScore: 0.33)     // overall() < 0.33 → cheap & fast
+            ->medium('4o', maxScore: 0.70)     // overall() < 0.70 → solid all-rounder
+            ->hard('o1')                       // otherwise → most capable
+    );
+```
+
+Resolution order on the first user message:
+
+1. If `coverage()` is below the configured threshold, the prompt is out of the classifier's domain — route to the `outOfDomain` provider.
+2. Otherwise compare `overall()` (one score in `[0,1]`) against the `easy`/`medium`/`hard` thresholds.
+
+The decision is cached after the first call, so the classifier runs once per conversation. Stickiness is scoped to the lifetime of the `RouterProvider` instance — build a fresh router per conversation to re-evaluate.
+
+When difficulty is unknown (no tier configured for the score, or no user message present), the rule falls back to the most capable configured tier (`hard → medium → easy → outOfDomain`).
+
 #### ContentRule
 
 Routes based on the content blocks inside messages (images, files, audio, video). When a message contains a content type that not all providers support, you can route it to one that does:

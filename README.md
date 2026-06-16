@@ -9,9 +9,9 @@ This is possible thanks to the Unified Messaging Layer that Neuron AI provides, 
 
 ## When to Use It
 
+- Router request to the appropriate models based on the expected difficulty scored by the [classifier](#difficultyrule)
 - Route `structured()` calls to a provider with better structured output support (e.g., OpenAI) while using another provider for `chat()`
 - Use different providers depending on the content of the messages (e.g., route image-heavy requests to Gemini)
-- Switch providers based on whether tools are present in the request
 - Implement cost-based or latency-based routing logic
 
 ## Installation

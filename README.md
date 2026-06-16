@@ -149,7 +149,7 @@ Routes by the difficulty of the conversation, using the [Neuron Classifier](http
 
 > The classifier is an **optional** dependency. Install it only if you use this rule:
 > ```
-> composer require neuron-core/classifier
+> composer require neuron-core/llm-classifier
 > ```
 
 ```php

@@ -145,7 +145,7 @@ $router->setRule(
 
 #### DifficultyRule
 
-Routes by the difficulty of the conversation, using the [Neuron Classifier](https://github.com/neuron-core/classifier) package. It classifies the **first user message** and then **sticks to that provider** for every subsequent message in the same conversation — the whole thread is served by the model the opening prompt was routed to.
+Routes by the difficulty of the conversation, using the [Neuron Classifier](https://github.com/neuron-core/llm-classifier) package. It classifies the **first user message** and then **sticks to that provider** for every subsequent message in the same conversation — the whole thread is served by the model the opening prompt was routed to.
 
 > The classifier is an **optional** dependency. Install it only if you use this rule:
 > ```

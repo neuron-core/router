@@ -19,7 +19,7 @@ This is possible thanks to the Unified Messaging Layer that Neuron AI provides, 
 Install the composer package:
 
 ```
-composer require neuron-ai/router
+composer require neuron-core/router
 ```
 
 ## Quick Start

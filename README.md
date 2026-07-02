@@ -85,6 +85,19 @@ RouterProvider::make()
 
 The rule's chosen provider is always tried first and is implicitly excluded from the fallback list (it is never retried). Names passed to `setFallbackOrder()` must be registered — an unknown name throws at configuration time. With no fallback order configured, behavior is unchanged (only the rule's provider is called).
 
+### Routing without a rule
+
+`setRule()` is optional. If you don't need dynamic per-request routing and just want a fixed provider order with automatic fallback, configure `setFallbackOrder()` alone:
+
+```php
+RouterProvider::make()
+    ->addProvider('anthropic', new Anthropic(...))
+    ->addProvider('openai', new OpenAI(...))
+    ->setFallbackOrder('anthropic', 'openai');
+```
+
+The first name in `setFallbackOrder()` becomes the primary, tried on every call; the rest are tried in order on transient failures. Calling without either `setRule()` or `setFallbackOrder()` throws `ProviderException`.
+
 ### What triggers a fallback
 
 The router falls back only on **transient** failures:
@@ -322,7 +335,7 @@ The router throws `ProviderException` with clear messages for misconfiguration:
 
 | Scenario | Error Message |
 |----------|--------------|
-| No routing rule set | `no routing strategy configured. Call setRule() to set one.` |
+| Neither a routing rule nor a fallback order set | `no routing strategy configured. Call setRule() to set one, or setFallbackOrder() to route without a rule.` |
 | No providers registered | `no providers registered. Call addProvider() to add one.` |
 | Rule returns unknown name | `unknown provider 'name'. Available: ...` |
 | Unknown default provider | `unknown provider 'name'. Available: ...` |

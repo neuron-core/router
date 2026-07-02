@@ -235,6 +235,55 @@ class RouterProviderTest extends TestCase
         $router->chat(UserMessage::make('hello'));
     }
 
+    // --- Rule-less (fallback-only) routing tests ---
+
+    public function test_routes_via_fallback_order_when_no_rule_configured(): void
+    {
+        $primary = $this->chatReturningMock('from primary');
+        $secondary = $this->createMock(AIProviderInterface::class);
+        $secondary->expects($this->never())->method('chat');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('secondary', $secondary)
+            ->setFallbackOrder('primary', 'secondary');
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from primary', $response->getContent());
+    }
+
+    public function test_falls_back_without_a_rule_on_transient_error(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(429));
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setFallbackOrder('primary', 'fallback');
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+    }
+
+    public function test_does_not_fall_back_without_a_rule_on_non_retryable_error(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(400));
+        $fallback = $this->createMock(AIProviderInterface::class);
+        $fallback->expects($this->never())->method('chat');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setFallbackOrder('primary', 'fallback');
+
+        $this->expectException(HttpException::class);
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+    }
+
     public function test_message_mapper_delegates_to_last_resolved_provider(): void
     {
         $fake = FakeAIProvider::make(AssistantMessage::make('ok'));

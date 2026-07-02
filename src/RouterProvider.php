@@ -141,7 +141,7 @@ class RouterProvider implements AIProviderInterface
         return $this->withFallback(
             'chat',
             $messages,
-            fn (AIProviderInterface $provider) => $provider->chat(...$messages),
+            fn (AIProviderInterface $provider): \NeuronAI\Chat\Messages\Message => $provider->chat(...$messages),
         );
     }
 
@@ -193,7 +193,7 @@ class RouterProvider implements AIProviderInterface
         return $this->withFallback(
             'structured',
             is_array($messages) ? $messages : [$messages],
-            fn (AIProviderInterface $provider) => $provider->structured($messages, $class, $response_schema),
+            fn (AIProviderInterface $provider): \NeuronAI\Chat\Messages\Message => $provider->structured($messages, $class, $response_schema),
         );
     }
 
@@ -202,7 +202,7 @@ class RouterProvider implements AIProviderInterface
      */
     public function messageMapper(): MessageMapperInterface
     {
-        if ($this->resolvedProvider === null) {
+        if (!$this->resolvedProvider instanceof \NeuronAI\Providers\AIProviderInterface) {
             throw new ProviderException(
                 'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
             );
@@ -215,7 +215,7 @@ class RouterProvider implements AIProviderInterface
      */
     public function toolPayloadMapper(): ToolMapperInterface
     {
-        if ($this->resolvedProvider === null) {
+        if (!$this->resolvedProvider instanceof \NeuronAI\Providers\AIProviderInterface) {
             throw new ProviderException(
                 'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
             );
@@ -330,7 +330,7 @@ class RouterProvider implements AIProviderInterface
      */
     protected function canFallback(Throwable $e): bool
     {
-        if ($this->fallbackStrategy !== null) {
+        if ($this->fallbackStrategy instanceof Closure) {
             return ($this->fallbackStrategy)($e);
         }
 

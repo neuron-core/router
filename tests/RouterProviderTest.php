@@ -539,7 +539,7 @@ class RouterProviderTest extends TestCase
 
     public function test_chat_falls_back_on_network_error(): void
     {
-        $primary = $this->failingProvider('chat', new HttpException('network', null, null));
+        $primary = $this->failingProvider('chat', new HttpException('network'));
         $fallback = $this->chatReturningMock('from fallback');
 
         $router = RouterProvider::make()

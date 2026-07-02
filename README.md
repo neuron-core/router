@@ -70,6 +70,52 @@ RouterProvider::make()
 
 The default is overwritten each time the routing rule resolves a provider, so it only acts as the initial fallback.
 
+## Fallback Providers
+
+By default the router calls only the provider selected by the routing rule. Configure a **fallback order** and, if that provider fails with a transient error, the router transparently tries the next provider in the list — useful for staying reliable when a provider hits its quota, rate-limits you, or returns a server error.
+
+```php
+RouterProvider::make()
+    ->addProvider('anthropic', new Anthropic(...))
+    ->addProvider('openai', new OpenAI(...))
+    ->addProvider('gemini', new Gemini(...))
+    ->setRule(new RoundRobinRule(['anthropic', 'openai', 'gemini']))
+    ->setFallbackOrder('anthropic', 'openai', 'gemini');
+```
+
+The rule's chosen provider is always tried first and is implicitly excluded from the fallback list (it is never retried). Names passed to `setFallbackOrder()` must be registered — an unknown name throws at configuration time. With no fallback order configured, behavior is unchanged (only the rule's provider is called).
+
+### What triggers a fallback
+
+The router falls back only on **transient** failures:
+
+| Failure | Falls back? |
+|---------|-------------|
+| Network error / timeout / DNS (`HttpException` with no response) | Yes |
+| Rate limit / quota — `429` | Yes |
+| Upstream server error — `5xx` | Yes |
+| Client error — `400`, `401`, `403`, `404` | No (rethrown) |
+| Any non-`HttpException` (e.g. message-mapping bugs) | No (rethrown) |
+
+The last-tried provider's error is the one that surfaces to the caller.
+
+### Custom fallback strategy
+
+If the built-in policy doesn't fit, supply a callable that inspects the thrown `Throwable` and returns `true` to fall back, `false` to rethrow:
+
+```php
+$router->setFallbackStrategy(function (Throwable $e): bool {
+    // Fall back on any HTTP error, including client errors like 401/403.
+    return $e instanceof HttpException;
+});
+```
+
+The strategy takes precedence over the default policy entirely — there is no merging of the two.
+
+### Streaming
+
+For `stream()`, the fallback applies only to the **initial request** (the one that opens the connection). If that fails with a retryable error, the next provider is tried. Once the first chunk has been emitted the stream cannot restart, so any failure from that point on propagates as-is.
+
 ## Routing Rules
 
 Routing logic is defined via the `RoutingRuleInterface`. The router calls `resolveProvider()` on the rule, passing context about the current request:
@@ -244,52 +290,6 @@ $router->setRule(
     )
 )
 ```
-
-## Fallback Providers
-
-By default the router calls only the provider selected by the routing rule. Configure a **fallback order** and, if that provider fails with a transient error, the router transparently tries the next provider in the list — useful for staying reliable when a provider hits its quota, rate-limits you, or returns a server error.
-
-```php
-RouterProvider::make()
-    ->addProvider('anthropic', new Anthropic(...))
-    ->addProvider('openai', new OpenAI(...))
-    ->addProvider('gemini', new Gemini(...))
-    ->setRule(new RoundRobinRule(['anthropic', 'openai', 'gemini']))
-    ->setFallbackOrder('anthropic', 'openai', 'gemini');
-```
-
-The rule's chosen provider is always tried first and is implicitly excluded from the fallback list (it is never retried). Names passed to `setFallbackOrder()` must be registered — an unknown name throws at configuration time. With no fallback order configured, behavior is unchanged (only the rule's provider is called).
-
-### What triggers a fallback
-
-The router falls back only on **transient** failures:
-
-| Failure | Falls back? |
-|---------|-------------|
-| Network error / timeout / DNS (`HttpException` with no response) | Yes |
-| Rate limit / quota — `429` | Yes |
-| Upstream server error — `5xx` | Yes |
-| Client error — `400`, `401`, `403`, `404` | No (rethrown) |
-| Any non-`HttpException` (e.g. message-mapping bugs) | No (rethrown) |
-
-The last-tried provider's error is the one that surfaces to the caller.
-
-### Custom fallback strategy
-
-If the built-in policy doesn't fit, supply a callable that inspects the thrown `Throwable` and returns `true` to fall back, `false` to rethrow:
-
-```php
-$router->setFallbackStrategy(function (Throwable $e): bool {
-    // Fall back on any HTTP error, including client errors like 401/403.
-    return $e instanceof HttpException;
-});
-```
-
-The strategy takes precedence over the default policy entirely — there is no merging of the two.
-
-### Streaming
-
-For `stream()`, the fallback applies only to the **initial request** (the one that opens the connection). If that fails with a retryable error, the next provider is tried. Once the first chunk has been emitted the stream cannot restart, so any failure from that point on propagates as-is.
 
 ## Using with an Agent
 

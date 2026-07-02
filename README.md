@@ -3,13 +3,16 @@
 This package provides you with a `RouterProvider` component. It is a proxy that implements `AIProviderInterface` and routes inference calls (`chat`, `stream`, `structured`) to different underlying providers based on a routing strategy you define.
 The agent doesn't know it's talking to a router, it's a drop-in replacement for any Neuron AI provider.
 
+At its simplest, the router is a reliability layer: define a **fallback order** of providers and if one fails with a transient error, the next is tried transparently. On top of that, you can add routing rules to choose which provider handles each request.
+
 This is possible thanks to the Unified Messaging Layer that Neuron AI provides, with full support for multi-modality. Documentation here: https://docs.neuron-ai.dev/agent/messages
 
 ![](/assets/neuron-router.png)
 
 ## When to Use It
 
-- Router request to the appropriate models based on the expected difficulty scored by the [classifier](#difficultyrule)
+- Stay reliable when a provider hits its quota, rate-limits you, or returns a server error — define a fallback order and the next provider is tried transparently
+- Route requests to the appropriate models based on the expected difficulty scored by the [classifier](#difficultyrule)
 - Route `structured()` calls to a provider with better structured output support (e.g., OpenAI) while using another provider for `chat()`
 - Use different providers depending on the content of the messages (e.g., route image-heavy requests to Gemini)
 - Implement cost-based or latency-based routing logic
@@ -24,13 +27,14 @@ composer require neuron-core/router
 
 ## Quick Start
 
+The most common use case: a fixed provider order with automatic fallback, no routing rule needed. Anthropic is the primary; if it fails with a transient error, OpenAI is tried next.
+
 ```php
 use NeuronAI\Router\RouterProvider;
-use NeuronAI\Router\Rules\MethodRule;
 use NeuronAI\Providers\Anthropic\Anthropic;
 use NeuronAI\Providers\OpenAI\OpenAI;
 
-class MyAgent extens Agent
+class MyAgent extends Agent
 {
     protected function provider(): AIProviderInterface
     {
@@ -43,9 +47,7 @@ class MyAgent extens Agent
                 key: 'OPENAI_API_KEY',
                 model: 'gpt-4o',
             ))
-            ->setRule(
-                new RoundRobinRule(['anthropic', 'openai'])
-            );
+            ->setFallbackOrder('anthropic', 'openai');
     }
 
     protected function instructions(): string
@@ -55,6 +57,8 @@ class MyAgent extens Agent
     {...}
 }
 ```
+
+Once you need to choose providers per request, add a [routing rule](#routing-rules).
 
 ## Default Provider
 
@@ -72,7 +76,13 @@ The default is overwritten each time the routing rule resolves a provider, so it
 
 ## Fallback Providers
 
-By default the router calls only the provider selected by the routing rule. Configure a **fallback order** and, if that provider fails with a transient error, the router transparently tries the next provider in the list — useful for staying reliable when a provider hits its quota, rate-limits you, or returns a server error.
+The fallback order defines which provider is tried, and in what order, when a call fails with a transient error — useful for staying reliable when a provider hits its quota, rate-limits you, or returns a server error. The [Quick Start](#quick-start) above shows the simplest case: no routing rule, just `setFallbackOrder()`. The first name is the **primary**, tried on every call; the rest are tried in order on transient failures.
+
+Names passed to `setFallbackOrder()` must be registered — an unknown name throws at configuration time. Calling without either `setRule()` or `setFallbackOrder()` throws `ProviderException`.
+
+### Combining a rule with fallback
+
+Add a routing rule and the fallback order works alongside it: the rule picks the provider for each request, and the fallback order takes over if that provider fails. The rule's chosen provider is always tried first and is implicitly excluded from the fallback list (it is never retried).
 
 ```php
 RouterProvider::make()
@@ -82,21 +92,6 @@ RouterProvider::make()
     ->setRule(new RoundRobinRule(['anthropic', 'openai', 'gemini']))
     ->setFallbackOrder('anthropic', 'openai', 'gemini');
 ```
-
-The rule's chosen provider is always tried first and is implicitly excluded from the fallback list (it is never retried). Names passed to `setFallbackOrder()` must be registered — an unknown name throws at configuration time. With no fallback order configured, behavior is unchanged (only the rule's provider is called).
-
-### Routing without a rule
-
-`setRule()` is optional. If you don't need dynamic per-request routing and just want a fixed provider order with automatic fallback, configure `setFallbackOrder()` alone:
-
-```php
-RouterProvider::make()
-    ->addProvider('anthropic', new Anthropic(...))
-    ->addProvider('openai', new OpenAI(...))
-    ->setFallbackOrder('anthropic', 'openai');
-```
-
-The first name in `setFallbackOrder()` becomes the primary, tried on every call; the rest are tried in order on transient failures. Calling without either `setRule()` or `setFallbackOrder()` throws `ProviderException`.
 
 ### What triggers a fallback
 

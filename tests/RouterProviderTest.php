@@ -655,6 +655,43 @@ class RouterProviderTest extends TestCase
         $router->setFallbackOrder('nope');
     }
 
+    public function test_custom_retry_strategy_can_enable_fallback_for_non_default_error(): void
+    {
+        // 400 is NOT retryable by the default policy, but the custom strategy opts in.
+        $primary = $this->failingProvider('chat', $this->httpError(400));
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback')
+            ->setFallbackStrategy(fn (Throwable $e): bool => $e instanceof HttpException && $e->response?->statusCode === 400);
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+    }
+
+    public function test_custom_retry_strategy_can_disable_fallback(): void
+    {
+        // 429 IS retryable by the default policy, but the custom strategy opts out.
+        $primary = $this->failingProvider('chat', $this->httpError(429));
+        $fallback = $this->createMock(AIProviderInterface::class);
+        $fallback->expects($this->never())->method('chat');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback')
+            ->setFallbackStrategy(fn (Throwable $e): bool => false);
+
+        $this->expectException(HttpException::class);
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+    }
+
     public function test_structured_falls_back_to_next_provider(): void
     {
         $primary = $this->failingProvider('structured', $this->httpError(429));

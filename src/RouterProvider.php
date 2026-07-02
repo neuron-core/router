@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace NeuronAI\Router;
 
+use Closure;
 use Generator;
 use Throwable;
 use NeuronAI\Chat\Messages\Message;
@@ -39,6 +40,12 @@ class RouterProvider implements AIProviderInterface
      *     with a retryable error. Empty by default (no fallback).
      */
     protected array $fallbackOrder = [];
+
+    /**
+     * @var Closure(Throwable): bool|null Custom logic deciding whether a failed
+     *     provider's error should trigger a fallback, or null to use the default.
+     */
+    protected ?Closure $fallbackStrategy = null;
 
     protected RoutingRuleInterface $rule;
 
@@ -99,6 +106,20 @@ class RouterProvider implements AIProviderInterface
         return $this;
     }
 
+    /**
+     * Provide custom logic deciding whether a failed provider's error should
+     * trigger a fallback to the next provider. Receives the thrown Throwable and
+     * must return true to fall back. When not set, only transient HTTP errors
+     * fall back (network/timeout, 429, 5xx).
+     *
+     * @param callable(Throwable): bool $strategy
+     */
+    public function setFallbackStrategy(callable $strategy): self
+    {
+        $this->fallbackStrategy = $strategy(...);
+        return $this;
+    }
+
     public function systemPrompt(?string $prompt): AIProviderInterface
     {
         $this->systemPrompt = $prompt;
@@ -144,7 +165,7 @@ class RouterProvider implements AIProviderInterface
             try {
                 $generator->rewind();
             } catch (Throwable $e) {
-                if (!$this->isRetryable($e) || $isLast) {
+                if (!$this->canFallback($e) || $isLast) {
                     throw $e;
                 }
                 continue;
@@ -284,7 +305,7 @@ class RouterProvider implements AIProviderInterface
             try {
                 return $callback($this->prepare($name));
             } catch (Throwable $e) {
-                if (!$this->isRetryable($e) || $isLast) {
+                if (!$this->canFallback($e) || $isLast) {
                     throw $e;
                 }
             }
@@ -303,11 +324,25 @@ class RouterProvider implements AIProviderInterface
     }
 
     /**
-     * A failure is eligible for fallback only when it is a transient HTTP error:
-     * a network/timeout failure (no response), a rate limit (429) or an upstream
-     * server error (5xx). Anything else is rethrown unchanged.
+     * Decides whether a failed provider's error should trigger a fallback. Uses
+     * the custom strategy set via setFallbackStrategy() when present, otherwise the
+     * built-in default.
      */
-    protected function isRetryable(Throwable $e): bool
+    protected function canFallback(Throwable $e): bool
+    {
+        if ($this->fallbackStrategy !== null) {
+            return ($this->fallbackStrategy)($e);
+        }
+
+        return $this->defaultFallbackStrategy($e);
+    }
+
+    /**
+     * Default fallback policy: transient HTTP errors only — a network/timeout
+     * failure (no response), a rate limit (429) or an upstream server error (5xx).
+     * Anything else is rethrown unchanged.
+     */
+    protected function defaultFallbackStrategy(Throwable $e): bool
     {
         if (!$e instanceof HttpException) {
             return false;

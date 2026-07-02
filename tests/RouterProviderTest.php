@@ -4,15 +4,20 @@ declare(strict_types=1);
 
 namespace NeuronAI\Tests\Router;
 
+use Generator;
+use Throwable;
 use NeuronAI\Chat\Enums\SourceType;
 use NeuronAI\Chat\Messages\AssistantMessage;
 use NeuronAI\Chat\Messages\ContentBlocks\AudioContent;
 use NeuronAI\Chat\Messages\ContentBlocks\FileContent;
 use NeuronAI\Chat\Messages\ContentBlocks\ImageContent;
 use NeuronAI\Chat\Messages\ContentBlocks\VideoContent;
+use NeuronAI\Chat\Messages\Stream\Chunks\TextChunk;
 use NeuronAI\Chat\Messages\UserMessage;
+use NeuronAI\Exceptions\HttpException;
 use NeuronAI\Exceptions\ProviderException;
 use NeuronAI\HttpClient\HttpClientInterface;
+use NeuronAI\HttpClient\HttpResponse;
 use NeuronAI\Providers\AIProviderInterface;
 use NeuronAI\Providers\MessageMapperInterface;
 use NeuronAI\Router\Rules\CallbackRule;
@@ -512,5 +517,290 @@ class RouterProviderTest extends TestCase
 
         $response4 = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
         $this->assertSame('b2', $response4->getContent());
+    }
+
+    // --- Fallback tests ---
+
+    public function test_chat_falls_back_to_next_provider_on_rate_limit(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(429));
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+    }
+
+    public function test_chat_falls_back_on_network_error(): void
+    {
+        $primary = $this->failingProvider('chat', new HttpException('network', null, null));
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+    }
+
+    public function test_chat_falls_back_on_server_error(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(503));
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+    }
+
+    public function test_chat_does_not_fall_back_on_non_http_error(): void
+    {
+        $primary = $this->failingProvider('chat', new ProviderException('mapping bug'));
+        $fallback = $this->createMock(AIProviderInterface::class);
+        $fallback->expects($this->never())->method('chat');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $this->expectException(ProviderException::class);
+        $this->expectExceptionMessage('mapping bug');
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+    }
+
+    public function test_chat_does_not_fall_back_on_client_error(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(400));
+        $fallback = $this->createMock(AIProviderInterface::class);
+        $fallback->expects($this->never())->method('chat');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $this->expectException(HttpException::class);
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+    }
+
+    public function test_chat_throws_last_error_when_all_providers_fail(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(429));
+        $fallback = $this->failingProvider('chat', $this->httpError(500));
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        // The last-tried (fallback) provider's error must surface, not the
+        // primary's 429.
+        $this->expectException(HttpException::class);
+        $this->expectExceptionMessage('HTTP 500');
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+    }
+
+    public function test_primary_is_not_retried_when_listed_in_fallback_order(): void
+    {
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->expects($this->once())->method('chat')->willThrowException($this->httpError(429));
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('primary', 'fallback');
+
+        $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+    }
+
+    public function test_set_fallback_order_throws_for_unknown_provider(): void
+    {
+        $router = RouterProvider::make()
+            ->addProvider('main', FakeAIProvider::make(AssistantMessage::make('ok')));
+
+        $this->expectException(ProviderException::class);
+        $this->expectExceptionMessage("unknown fallback provider 'nope'");
+
+        $router->setFallbackOrder('nope');
+    }
+
+    public function test_structured_falls_back_to_next_provider(): void
+    {
+        $primary = $this->failingProvider('structured', $this->httpError(429));
+        $fallback = $this->createMock(AIProviderInterface::class);
+        $fallback->method('systemPrompt')->willReturnSelf();
+        $fallback->method('setTools')->willReturnSelf();
+        $fallback->method('structured')->willReturn(AssistantMessage::make('structured fallback'));
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $response = $router->systemPrompt(null)->setTools([])->structured([UserMessage::make('hi')], 'stdClass', []);
+
+        $this->assertSame('structured fallback', $response->getContent());
+    }
+
+    public function test_stream_falls_back_on_initial_request_failure(): void
+    {
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->method('stream')->willReturn($this->generatorThatThrowsImmediately($this->httpError(429)));
+        $fallback = FakeAIProvider::make(AssistantMessage::make('hello world'));
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $stream = $router->systemPrompt(null)->setTools([])->stream(UserMessage::make('hi'));
+
+        $chunks = [];
+        foreach ($stream as $chunk) {
+            $chunks[] = $chunk;
+        }
+
+        $this->assertNotEmpty($chunks);
+        $this->assertSame('hello world', $stream->getReturn()->getContent());
+        // The failing primary was tried, then the fallback produced the stream.
+        $this->assertSame(1, $fallback->getCallCount());
+    }
+
+    public function test_stream_does_not_fall_back_after_chunks_emitted(): void
+    {
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->method('stream')->willReturn(
+            $this->generatorThatYieldsThenThrows(new TextChunk('id', 'partial'), $this->httpError(500))
+        );
+        $fallback = FakeAIProvider::make(AssistantMessage::make('should not be used'));
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $stream = $router->systemPrompt(null)->setTools([])->stream(UserMessage::make('hi'));
+
+        $chunks = [];
+        try {
+            foreach ($stream as $chunk) {
+                $chunks[] = $chunk;
+            }
+            $this->fail('Expected the streamed exception to propagate.');
+        } catch (HttpException $e) {
+            $this->assertSame(500, $e->response->statusCode);
+        }
+
+        $this->assertCount(1, $chunks);
+        // Once output has been emitted the stream cannot restart, so the
+        // fallback must never have been invoked.
+        $this->assertSame(0, $fallback->getCallCount());
+    }
+
+    public function test_stream_does_not_fall_back_on_non_retryable_error(): void
+    {
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->method('stream')->willReturn($this->generatorThatThrowsImmediately(new ProviderException('mapping bug')));
+        $fallback = FakeAIProvider::make(AssistantMessage::make('should not be used'));
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $this->expectException(ProviderException::class);
+        $this->expectExceptionMessage('mapping bug');
+
+        // The initial request failure now surfaces eagerly when stream() is
+        // called (the request must run so it can be caught for fallback).
+        $router->systemPrompt(null)->setTools([])->stream(UserMessage::make('hi'));
+    }
+
+    // --- Fallback test helpers ---
+
+    private function httpError(int $status, string $body = ''): HttpException
+    {
+        return new HttpException("HTTP {$status}", null, new HttpResponse($status, $body));
+    }
+
+    /**
+     * @return AIProviderInterface&\PHPUnit\Framework\MockObject\MockObject
+     */
+    private function failingProvider(string $method, Throwable $error): AIProviderInterface
+    {
+        $provider = $this->createMock(AIProviderInterface::class);
+        $provider->method('systemPrompt')->willReturnSelf();
+        $provider->method('setTools')->willReturnSelf();
+        $provider->method($method)->willThrowException($error);
+
+        return $provider;
+    }
+
+    /**
+     * @return AIProviderInterface&\PHPUnit\Framework\MockObject\MockObject
+     */
+    private function chatReturningMock(string $content): AIProviderInterface
+    {
+        $provider = $this->createMock(AIProviderInterface::class);
+        $provider->method('systemPrompt')->willReturnSelf();
+        $provider->method('setTools')->willReturnSelf();
+        $provider->method('chat')->willReturn(AssistantMessage::make($content));
+
+        return $provider;
+    }
+
+    private function generatorThatThrowsImmediately(Throwable $e): Generator
+    {
+        // Yields nothing, then fails on the first iteration — i.e. the initial
+        // request is rejected before any chunk is emitted.
+        yield from [];
+        throw $e;
+    }
+
+    private function generatorThatYieldsThenThrows(TextChunk $chunk, Throwable $e): Generator
+    {
+        yield $chunk;
+        throw $e;
     }
 }

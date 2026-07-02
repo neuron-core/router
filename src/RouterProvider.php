@@ -232,8 +232,10 @@ class RouterProvider implements AIProviderInterface
     }
 
     /**
-     * Ordered candidate provider names: the rule's primary first, followed by
-     * the configured fallback order (deduplicated, primary excluded).
+     * Ordered candidate provider names. With a rule configured: the rule's
+     * primary first, followed by the configured fallback order (deduplicated,
+     * primary excluded). Without a rule: the fallback order in full, used as a
+     * plain ordered chain (first entry is the primary, tried first).
      *
      * @param Message[] $messages
      * @return list<string>
@@ -242,6 +244,22 @@ class RouterProvider implements AIProviderInterface
      */
     protected function candidates(string $method, array $messages): array
     {
+        if ($this->providers === []) {
+            throw new ProviderException(
+                'RouterProvider: no providers registered. Call addProvider() to add one.',
+            );
+        }
+
+        if (!isset($this->rule)) {
+            if ($this->fallbackOrder === []) {
+                throw new ProviderException(
+                    'RouterProvider: no routing strategy configured. Call setRule() to set one, or setFallbackOrder() to route without a rule.',
+                );
+            }
+
+            return $this->fallbackOrder;
+        }
+
         $primary = $this->resolveProviderName($method, $messages);
         $candidates = [$primary];
 
@@ -261,18 +279,6 @@ class RouterProvider implements AIProviderInterface
      */
     protected function resolveProviderName(string $method, array $messages): string
     {
-        if (!isset($this->rule)) {
-            throw new ProviderException(
-                'RouterProvider: no routing strategy configured. Call setRule() to set one.',
-            );
-        }
-
-        if ($this->providers === []) {
-            throw new ProviderException(
-                'RouterProvider: no providers registered. Call addProvider() to add one.',
-            );
-        }
-
         $name = $this->rule->resolveProvider($method, $messages, $this->tools);
 
         if (!isset($this->providers[$name])) {

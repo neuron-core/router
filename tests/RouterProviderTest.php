@@ -13,6 +13,7 @@ use NeuronAI\Chat\Messages\ContentBlocks\FileContent;
 use NeuronAI\Chat\Messages\ContentBlocks\ImageContent;
 use NeuronAI\Chat\Messages\ContentBlocks\VideoContent;
 use NeuronAI\Chat\Messages\Stream\Chunks\TextChunk;
+use NeuronAI\Chat\Messages\Message;
 use NeuronAI\Chat\Messages\UserMessage;
 use NeuronAI\Exceptions\HttpException;
 use NeuronAI\Exceptions\ProviderException;
@@ -160,6 +161,39 @@ class RouterProviderTest extends TestCase
 
         $this->assertNotEmpty($chunks);
         $this->assertSame('hello world', $stream->getReturn()->getContent());
+    }
+
+    public function test_stream_is_iterable_when_primary_yields_no_chunks(): void
+    {
+        // A tool-only turn: the provider resolves the response without emitting
+        // a chunk, so stream()'s priming rewind() consumes the generator
+        // entirely. The returned stream must still be traversable, exposing the
+        // final message through its return value.
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->method('stream')->willReturn(
+            $this->generatorThatYieldsNothing(AssistantMessage::make('tool response'))
+        );
+        $fallback = FakeAIProvider::make(AssistantMessage::make('should not be used'));
+
+        $router = RouterProvider::make()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setRule(new CallbackRule(fn (): string => 'primary'))
+            ->setFallbackOrder('fallback');
+
+        $stream = $router->systemPrompt(null)->setTools([])->stream(UserMessage::make('hi'));
+
+        $chunks = [];
+        foreach ($stream as $chunk) {
+            $chunks[] = $chunk;
+        }
+
+        $this->assertSame([], $chunks);
+        $this->assertSame('tool response', $stream->getReturn()->getContent());
+        // An empty stream is a completed turn, not a failure: no fallback.
+        $this->assertSame(0, $fallback->getCallCount());
     }
 
     // --- Forwarding tests ---
@@ -874,6 +908,12 @@ class RouterProviderTest extends TestCase
         $provider->method('chat')->willReturn(AssistantMessage::make($content));
 
         return $provider;
+    }
+
+    private function generatorThatYieldsNothing(Message $return): Generator
+    {
+        yield from [];
+        return $return;
     }
 
     private function generatorThatThrowsImmediately(Throwable $e): Generator

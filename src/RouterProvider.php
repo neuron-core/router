@@ -171,15 +171,35 @@ class RouterProvider implements AIProviderInterface
                 continue;
             }
 
-            // The initial request succeeded. Hand the (already-started) generator
-            // back to the caller; PHP iteration resumes it from the current
-            // position. Any failure from here is mid-stream and propagates as-is.
-            return $generator;
+            // The initial request succeeded. rewind() above may already have
+            // consumed the generator completely: a turn that ends without
+            // emitting a chunk (e.g. a tool-only response) closes the generator,
+            // and PHP forbids traversing it again. Hand the caller a fresh
+            // generator replaying the primed one instead. Any failure from here
+            // is mid-stream and propagates as-is.
+            return $this->replay($generator);
         }
 
         // Unreachable: candidates() always returns at least the primary, so the
         // last iteration always returns or throws.
         throw new ProviderException('RouterProvider: all providers failed.');
+    }
+
+    /**
+     * Replay an already-primed generator through a fresh one, forwarding its
+     * final return value, so the caller always receives a traversable stream.
+     *
+     * @param Generator<int, StreamChunk, mixed, Message> $primed
+     * @return Generator<int, StreamChunk, mixed, Message>
+     */
+    protected function replay(Generator $primed): Generator
+    {
+        while ($primed->valid()) {
+            yield $primed->current();
+            $primed->next();
+        }
+
+        return $primed->getReturn();
     }
 
     /**

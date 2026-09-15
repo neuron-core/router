@@ -15,8 +15,6 @@ use NeuronAI\Exceptions\HttpException;
 use NeuronAI\Exceptions\ProviderException;
 use NeuronAI\HttpClient\HttpClientInterface;
 use NeuronAI\Providers\AIProviderInterface;
-use NeuronAI\Providers\MessageMapperInterface;
-use NeuronAI\Providers\ToolMapperInterface;
 use NeuronAI\Router\Rules\RoutingRuleInterface;
 use NeuronAI\StaticConstructor;
 use NeuronAI\Tools\ToolInterface;
@@ -153,7 +151,7 @@ class RouterProvider implements AIProviderInterface
     }
 
     /**
-     * @return Generator<int, StreamChunk, mixed, Message>
+     * @return Generator<int, StreamChunk, mixed, ProviderResponse>
      * @throws ProviderException
      * @throws Throwable When no chunk has been emitted and the primary and all fallback providers fail with a retryable error.
      */
@@ -196,8 +194,8 @@ class RouterProvider implements AIProviderInterface
      * Replay an already-primed generator through a fresh one, forwarding its
      * final return value, so the caller always receives a traversable stream.
      *
-     * @param Generator<int, StreamChunk, mixed, Message> $primed
-     * @return Generator<int, StreamChunk, mixed, Message>
+     * @param Generator<int, StreamChunk, mixed, ProviderResponse> $primed
+     * @return Generator<int, StreamChunk, mixed, ProviderResponse>
      */
     protected function replay(Generator $primed): Generator
     {
@@ -222,32 +220,6 @@ class RouterProvider implements AIProviderInterface
             messages: is_array($messages) ? $messages : [$messages],
             callback: fn (AIProviderInterface $provider): ProviderResponse => $provider->structured($messages, $class, $response_schema),
         );
-    }
-
-    /**
-     * @throws ProviderException
-     */
-    public function messageMapper(): MessageMapperInterface
-    {
-        if (!$this->resolvedProvider instanceof AIProviderInterface) {
-            throw new ProviderException(
-                'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
-            );
-        }
-        return $this->resolvedProvider->messageMapper();
-    }
-
-    /**
-     * @throws ProviderException
-     */
-    public function toolPayloadMapper(): ToolMapperInterface
-    {
-        if (!$this->resolvedProvider instanceof AIProviderInterface) {
-            throw new ProviderException(
-                'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
-            );
-        }
-        return $this->resolvedProvider->toolPayloadMapper();
     }
 
     public function setHttpClient(HttpClientInterface $client): AIProviderInterface
@@ -323,7 +295,7 @@ class RouterProvider implements AIProviderInterface
      * any provider is rethrown immediately.
      *
      * @param Message[] $messages
-     * @param callable(AIProviderInterface): Message $callback
+     * @param callable(AIProviderInterface): ProviderResponse $callback
      *
      * @throws Throwable
      */

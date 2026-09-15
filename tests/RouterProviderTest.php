@@ -20,7 +20,7 @@ use NeuronAI\Exceptions\ProviderException;
 use NeuronAI\HttpClient\HttpClientInterface;
 use NeuronAI\HttpClient\HttpResponse;
 use NeuronAI\Providers\AIProviderInterface;
-use NeuronAI\Providers\MessageMapperInterface;
+use NeuronAI\Providers\ProviderResponse;
 use NeuronAI\Router\Rules\CallbackRule;
 use NeuronAI\Router\Rules\ContentRule;
 use NeuronAI\Router\Rules\MethodRule;
@@ -28,7 +28,7 @@ use NeuronAI\Router\Rules\RoundRobinRule;
 use NeuronAI\Router\Rules\RoutingRuleInterface;
 use NeuronAI\Router\RouterProvider;
 use NeuronAI\Testing\FakeAIProvider;
-use NeuronAI\Tools\Tool;
+use NeuronAI\Tools\FrontendTool;
 use PHPUnit\Framework\TestCase;
 
 class RouterProviderTest extends TestCase
@@ -49,7 +49,7 @@ class RouterProviderTest extends TestCase
             ->systemPrompt('test prompt')
             ->chat(UserMessage::make('hello'));
 
-        $this->assertSame('from anthropic', $response->getContent());
+        $this->assertSame('from anthropic', $response->message()->getContent());
     }
 
     public function test_callback_rule_routes_structured_to_different_provider(): void
@@ -67,13 +67,13 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->structured([UserMessage::make('hello')], 'stdClass', []);
 
-        $this->assertSame('from openai', $response->getContent());
+        $this->assertSame('from openai', $response->message()->getContent());
     }
 
     public function test_callback_rule_receives_messages_and_tools(): void
     {
         $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
-        $tool = Tool::make('search', 'Search tool');
+        $tool = FrontendTool::make('search', 'Search tool');
         $received = [];
 
         $router = RouterProvider::make()
@@ -110,7 +110,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat(UserMessage::make('hello'));
 
-        $this->assertSame('from anthropic', $chatResponse->getContent());
+        $this->assertSame('from anthropic', $chatResponse->message()->getContent());
 
         // Need to add another response for the structured call
         $anthropic->addResponses(AssistantMessage::make('from anthropic 2'));
@@ -120,7 +120,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->structured([UserMessage::make('hello')], 'stdClass', []);
 
-        $this->assertSame('from openai', $structuredResponse->getContent());
+        $this->assertSame('from openai', $structuredResponse->message()->getContent());
     }
 
     public function test_method_rule_uses_default_when_no_override(): void
@@ -136,7 +136,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat(UserMessage::make('hello'));
 
-        $this->assertSame('default', $response->getContent());
+        $this->assertSame('default', $response->message()->getContent());
     }
 
     // --- Streaming tests ---
@@ -160,7 +160,7 @@ class RouterProviderTest extends TestCase
         }
 
         $this->assertNotEmpty($chunks);
-        $this->assertSame('hello world', $stream->getReturn()->getContent());
+        $this->assertSame('hello world', $stream->getReturn()->message()->getContent());
     }
 
     public function test_stream_is_iterable_when_primary_yields_no_chunks(): void
@@ -191,7 +191,7 @@ class RouterProviderTest extends TestCase
         }
 
         $this->assertSame([], $chunks);
-        $this->assertSame('tool response', $stream->getReturn()->getContent());
+        $this->assertSame('tool response', $stream->getReturn()->message()->getContent());
         // An empty stream is a completed turn, not a failure: no fallback.
         $this->assertSame(0, $fallback->getCallCount());
     }
@@ -200,7 +200,7 @@ class RouterProviderTest extends TestCase
 
     public function test_forwards_system_prompt_and_tools_to_chosen_provider(): void
     {
-        $tool = Tool::make('test_tool', 'A test tool');
+        $tool = FrontendTool::make('test_tool', 'A test tool');
         $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
 
         $router = RouterProvider::make()
@@ -284,7 +284,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from primary', $response->getContent());
+        $this->assertSame('from primary', $response->message()->getContent());
     }
 
     public function test_falls_back_without_a_rule_on_transient_error(): void
@@ -299,7 +299,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from fallback', $response->getContent());
+        $this->assertSame('from fallback', $response->message()->getContent());
     }
 
     public function test_does_not_fall_back_without_a_rule_on_non_retryable_error(): void
@@ -318,74 +318,6 @@ class RouterProviderTest extends TestCase
         $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
     }
 
-    public function test_message_mapper_delegates_to_last_resolved_provider(): void
-    {
-        $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
-
-        $router = RouterProvider::make()
-            ->addProvider('main', $fake)
-            ->setRule(new CallbackRule(fn (): string => 'main'));
-
-        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hello'));
-
-        $this->assertInstanceOf(\NeuronAI\Testing\FakeMessageMapper::class, $router->messageMapper());
-    }
-
-    public function test_tool_payload_mapper_delegates_to_last_resolved_provider(): void
-    {
-        $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
-
-        $router = RouterProvider::make()
-            ->addProvider('main', $fake)
-            ->setRule(new CallbackRule(fn (): string => 'main'));
-
-        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hello'));
-
-        $this->assertInstanceOf(\NeuronAI\Testing\FakeToolMapper::class, $router->toolPayloadMapper());
-    }
-
-    public function test_mapper_uses_default_provider_before_any_call(): void
-    {
-        $fake = FakeAIProvider::make(AssistantMessage::make('ok'));
-
-        $router = RouterProvider::make()
-            ->addProvider('main', $fake)
-            ->setDefaultProvider('main');
-
-        $this->assertInstanceOf(\NeuronAI\Testing\FakeMessageMapper::class, $router->messageMapper());
-        $this->assertInstanceOf(\NeuronAI\Testing\FakeToolMapper::class, $router->toolPayloadMapper());
-    }
-
-    public function test_default_provider_overwritten_by_routing(): void
-    {
-        $mapperA = $this->createMock(MessageMapperInterface::class);
-        $mapperB = $this->createMock(MessageMapperInterface::class);
-
-        $providerA = $this->createMock(AIProviderInterface::class);
-        $providerA->method('messageMapper')->willReturn($mapperA);
-        $providerA->method('systemPrompt')->willReturnSelf();
-        $providerA->method('setTools')->willReturnSelf();
-        $providerA->method('chat')->willReturn(AssistantMessage::make('a'));
-
-        $providerB = $this->createMock(AIProviderInterface::class);
-        $providerB->method('messageMapper')->willReturn($mapperB);
-        $providerB->method('systemPrompt')->willReturnSelf();
-        $providerB->method('setTools')->willReturnSelf();
-        $providerB->method('chat')->willReturn(AssistantMessage::make('b'));
-
-        $router = RouterProvider::make()
-            ->addProvider('a', $providerA)
-            ->addProvider('b', $providerB)
-            ->setDefaultProvider('a')
-            ->setRule(new CallbackRule(fn (): string => 'b'));
-
-        $this->assertSame($mapperA, $router->messageMapper());
-
-        $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hello'));
-
-        $this->assertSame($mapperB, $router->messageMapper());
-    }
-
     public function test_set_default_provider_throws_for_unknown_name(): void
     {
         $router = RouterProvider::make()
@@ -394,16 +326,6 @@ class RouterProviderTest extends TestCase
         $this->expectException(ProviderException::class);
         $this->expectExceptionMessage("unknown provider 'unknown'");
         $router->setDefaultProvider('unknown');
-    }
-
-    public function test_mapper_throws_when_no_default_and_no_resolution(): void
-    {
-        $router = RouterProvider::make()
-            ->addProvider('main', FakeAIProvider::make(AssistantMessage::make('ok')));
-
-        $this->expectException(ProviderException::class);
-        $this->expectExceptionMessage('no provider available for delegation');
-        $router->messageMapper();
     }
 
     // --- Interface compliance ---
@@ -442,7 +364,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat(UserMessage::make('just text'));
 
-        $this->assertSame('anthropic', $response->getContent());
+        $this->assertSame('anthropic', $response->message()->getContent());
     }
 
     public function test_content_rule_routes_image_to_configured_provider(): void
@@ -463,7 +385,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat($message);
 
-        $this->assertSame('gemini', $response->getContent());
+        $this->assertSame('gemini', $response->message()->getContent());
     }
 
     public function test_content_rule_routes_file_to_configured_provider(): void
@@ -484,7 +406,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat($message);
 
-        $this->assertSame('openai', $response->getContent());
+        $this->assertSame('openai', $response->message()->getContent());
     }
 
     public function test_content_rule_routes_audio_to_configured_provider(): void
@@ -505,7 +427,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat($message);
 
-        $this->assertSame('openai', $response->getContent());
+        $this->assertSame('openai', $response->message()->getContent());
     }
 
     public function test_content_rule_routes_video_to_configured_provider(): void
@@ -526,7 +448,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat($message);
 
-        $this->assertSame('gemini', $response->getContent());
+        $this->assertSame('gemini', $response->message()->getContent());
     }
 
     public function test_content_rule_video_takes_precedence_over_image(): void
@@ -548,7 +470,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat($message);
 
-        $this->assertSame('gemini', $response->getContent());
+        $this->assertSame('gemini', $response->message()->getContent());
     }
 
     public function test_content_rule_ignores_unconfigured_content_types(): void
@@ -568,7 +490,7 @@ class RouterProviderTest extends TestCase
             ->setTools([])
             ->chat($message);
 
-        $this->assertSame('anthropic', $response->getContent());
+        $this->assertSame('anthropic', $response->message()->getContent());
     }
 
     // --- RoundRobinRule tests ---
@@ -590,16 +512,16 @@ class RouterProviderTest extends TestCase
             ->setRule(new RoundRobinRule(['a', 'b']));
 
         $response1 = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
-        $this->assertSame('a1', $response1->getContent());
+        $this->assertSame('a1', $response1->message()->getContent());
 
         $response2 = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
-        $this->assertSame('b1', $response2->getContent());
+        $this->assertSame('b1', $response2->message()->getContent());
 
         $response3 = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
-        $this->assertSame('a2', $response3->getContent());
+        $this->assertSame('a2', $response3->message()->getContent());
 
         $response4 = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
-        $this->assertSame('b2', $response4->getContent());
+        $this->assertSame('b2', $response4->message()->getContent());
     }
 
     // --- Fallback tests ---
@@ -617,7 +539,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from fallback', $response->getContent());
+        $this->assertSame('from fallback', $response->message()->getContent());
     }
 
     public function test_chat_falls_back_on_network_error(): void
@@ -633,7 +555,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from fallback', $response->getContent());
+        $this->assertSame('from fallback', $response->message()->getContent());
     }
 
     public function test_chat_falls_back_on_server_error(): void
@@ -649,7 +571,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from fallback', $response->getContent());
+        $this->assertSame('from fallback', $response->message()->getContent());
     }
 
     public function test_chat_does_not_fall_back_on_non_http_error(): void
@@ -724,7 +646,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from fallback', $response->getContent());
+        $this->assertSame('from fallback', $response->message()->getContent());
     }
 
     public function test_set_fallback_order_throws_for_unknown_provider(): void
@@ -753,7 +675,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
 
-        $this->assertSame('from fallback', $response->getContent());
+        $this->assertSame('from fallback', $response->message()->getContent());
     }
 
     public function test_custom_retry_strategy_can_disable_fallback(): void
@@ -781,7 +703,7 @@ class RouterProviderTest extends TestCase
         $fallback = $this->createMock(AIProviderInterface::class);
         $fallback->method('systemPrompt')->willReturnSelf();
         $fallback->method('setTools')->willReturnSelf();
-        $fallback->method('structured')->willReturn(AssistantMessage::make('structured fallback'));
+        $fallback->method('structured')->willReturn(new ProviderResponse(message: AssistantMessage::make('structured fallback')));
 
         $router = RouterProvider::make()
             ->addProvider('primary', $primary)
@@ -791,7 +713,7 @@ class RouterProviderTest extends TestCase
 
         $response = $router->systemPrompt(null)->setTools([])->structured([UserMessage::make('hi')], 'stdClass', []);
 
-        $this->assertSame('structured fallback', $response->getContent());
+        $this->assertSame('structured fallback', $response->message()->getContent());
     }
 
     public function test_stream_falls_back_on_initial_request_failure(): void
@@ -816,7 +738,7 @@ class RouterProviderTest extends TestCase
         }
 
         $this->assertNotEmpty($chunks);
-        $this->assertSame('hello world', $stream->getReturn()->getContent());
+        $this->assertSame('hello world', $stream->getReturn()->message()->getContent());
         // The failing primary was tried, then the fallback produced the stream.
         $this->assertSame(1, $fallback->getCallCount());
     }
@@ -905,7 +827,7 @@ class RouterProviderTest extends TestCase
         $provider = $this->createMock(AIProviderInterface::class);
         $provider->method('systemPrompt')->willReturnSelf();
         $provider->method('setTools')->willReturnSelf();
-        $provider->method('chat')->willReturn(AssistantMessage::make($content));
+        $provider->method('chat')->willReturn(new ProviderResponse(message: AssistantMessage::make($content)));
 
         return $provider;
     }
@@ -913,7 +835,7 @@ class RouterProviderTest extends TestCase
     private function generatorThatYieldsNothing(Message $return): Generator
     {
         yield from [];
-        return $return;
+        return new ProviderResponse(message: $return);
     }
 
     private function generatorThatThrowsImmediately(Throwable $e): Generator

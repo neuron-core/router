@@ -6,6 +6,8 @@ namespace NeuronAI\Router;
 
 use Closure;
 use Generator;
+use NeuronAI\Chat\Messages\SystemMessage;
+use NeuronAI\Providers\ProviderResponse;
 use Throwable;
 use NeuronAI\Chat\Messages\Message;
 use NeuronAI\Chat\Messages\Stream\Chunks\StreamChunk;
@@ -57,6 +59,11 @@ class RouterProvider implements AIProviderInterface
      * @var array<ToolInterface>
      */
     protected array $tools = [];
+
+    public function getModel(): string
+    {
+        return $this->resolvedProvider->getModel();
+    }
 
     public function addProvider(string $name, AIProviderInterface $provider): self
     {
@@ -120,7 +127,7 @@ class RouterProvider implements AIProviderInterface
         return $this;
     }
 
-    public function systemPrompt(?string $prompt): AIProviderInterface
+    public function systemPrompt(SystemMessage|string|null $prompt): AIProviderInterface
     {
         $this->systemPrompt = $prompt;
         return $this;
@@ -136,12 +143,12 @@ class RouterProvider implements AIProviderInterface
      * @throws ProviderException
      * @throws Throwable When the primary and all fallback providers fail with a retryable error.
      */
-    public function chat(Message ...$messages): Message
+    public function chat(Message ...$messages): ProviderResponse
     {
         return $this->withFallback(
             'chat',
             $messages,
-            fn (AIProviderInterface $provider): \NeuronAI\Chat\Messages\Message => $provider->chat(...$messages),
+            fn (AIProviderInterface $provider): ProviderResponse => $provider->chat(...$messages),
         );
     }
 
@@ -208,12 +215,12 @@ class RouterProvider implements AIProviderInterface
      * @throws ProviderException
      * @throws Throwable When the primary and all fallback providers fail with a retryable error.
      */
-    public function structured(array|Message $messages, string $class, array $response_schema): Message
+    public function structured(array|Message $messages, string $class, array $response_schema): ProviderResponse
     {
         return $this->withFallback(
-            'structured',
-            is_array($messages) ? $messages : [$messages],
-            fn (AIProviderInterface $provider): \NeuronAI\Chat\Messages\Message => $provider->structured($messages, $class, $response_schema),
+            method: 'structured',
+            messages: is_array($messages) ? $messages : [$messages],
+            callback: fn (AIProviderInterface $provider): ProviderResponse => $provider->structured($messages, $class, $response_schema),
         );
     }
 
@@ -222,7 +229,7 @@ class RouterProvider implements AIProviderInterface
      */
     public function messageMapper(): MessageMapperInterface
     {
-        if (!$this->resolvedProvider instanceof \NeuronAI\Providers\AIProviderInterface) {
+        if (!$this->resolvedProvider instanceof AIProviderInterface) {
             throw new ProviderException(
                 'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
             );
@@ -235,7 +242,7 @@ class RouterProvider implements AIProviderInterface
      */
     public function toolPayloadMapper(): ToolMapperInterface
     {
-        if (!$this->resolvedProvider instanceof \NeuronAI\Providers\AIProviderInterface) {
+        if (!$this->resolvedProvider instanceof AIProviderInterface) {
             throw new ProviderException(
                 'RouterProvider: no provider available for delegation. Call setDefaultProvider() or make an inference call first.',
             );
@@ -320,7 +327,7 @@ class RouterProvider implements AIProviderInterface
      *
      * @throws Throwable
      */
-    protected function withFallback(string $method, array $messages, callable $callback): Message
+    protected function withFallback(string $method, array $messages, callable $callback): ProviderResponse
     {
         $candidates = $this->candidates($method, $messages);
 

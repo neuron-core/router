@@ -7,7 +7,7 @@ At its simplest, the router is a reliability layer: define a **fallback order** 
 
 This is possible thanks to the Unified Messaging Layer that Neuron AI provides, with full support for multi-modality. Documentation here: https://docs.neuron-ai.dev/agent/messages
 
-![](/assets/neuron-router.png)
+![](/assets/header.png)
 
 ## When to Use It
 

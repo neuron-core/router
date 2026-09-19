@@ -199,48 +199,33 @@ $router->setRule(
 
 #### DifficultyRule
 
-Routes by the difficulty of the conversation, using the [Neuron Classifier](https://github.com/neuron-core/llm-classifier) package. It classifies the **first user message** and then **sticks to that provider** for every subsequent message in the same conversation — the whole thread is served by the model the opening prompt was routed to.
-
-> The classifier is an **optional** dependency. Install it only if you use this rule:
-> ```
-> composer require neuron-core/llm-classifier
-> ```
+Routes by the difficulty of the current task using Neuron AI's built-in `ClassifierInterface`. Pass any implementation, such as [TypeSafeAI](https://docs.typesafe.ai/introduction). No separate classifier package is needed.
 
 ```php
+use NeuronAI\Classifier\TypeSafeAI\TypeSafeAI;
+use NeuronAI\Providers\OpenAI\OpenAI;
+use NeuronAI\Router\RouterProvider;
 use NeuronAI\Router\Rules\DifficultyRule;
-use NeuronCore\Classifier\Classifier;
 
+$classifier = new TypeSafeAI(key: 'TYPESAFE_API_KEY');
 
-class MyAgent extens Agent
-{
-    protected function provider(): AIProviderInterface
-    {
-        // Load the classifier ONCE (e.g. on app boot or under a long-lived worker).
-        $scorer = Classifier::load('storage/model.bin');
-
-        return RouterProvider::make()
-            ->addProvider('mini', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o-mini'))
-            ->addProvider('4o', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o'))
-            ->addProvider('o1', new OpenAI(key: 'OPENAI_API_KEY', model: 'o1'))
-            ->setRule(
-                (new DifficultyRule($scorer))
-                    ->outOfDomain('o1', coverage: 0.4) // unfamiliar prompt → most capable
-                    ->easy('mini', maxScore: 0.33)     // overall() < 0.33 → cheap & fast
-                    ->medium('4o', maxScore: 0.70)     // overall() < 0.70 → solid all-rounder
-                    ->hard('o1')                       // otherwise → most capable
-            );
-    }
-}
+$router = RouterProvider::make()
+    ->addProvider('mini', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o-mini'))
+    ->addProvider('4o', new OpenAI(key: 'OPENAI_API_KEY', model: 'gpt-4o'))
+    ->addProvider('o1', new OpenAI(key: 'OPENAI_API_KEY', model: 'o1'))
+    ->setRule(
+        (new DifficultyRule($classifier))
+            ->easy('mini', maxScore: 0.33)
+            ->medium('4o', maxScore: 0.70)
+            ->hard('o1')
+    );
 ```
 
-Resolution order on the first user message:
+On every `chat()`, `stream()`, or `structured()` request, the rule sends the entire supplied message history, serialized as JSON, to the classifier. Message roles and content, including tool calls and results, are preserved. The classifier assesses the work needed for the next response against three ordered levels: easy, medium, and hard. Its expected level position (`0` through `2`) is divided by two to obtain a score in `[0, 1]`.
 
-1. If `coverage()` is below the configured threshold, the prompt is out of the classifier's domain — route to the `outOfDomain` provider.
-2. Otherwise compare `overall()` (one score in `[0,1]`) against the `easy`/`medium`/`hard` thresholds.
+The rule chooses `easy` when the score is below its threshold, then `medium` when below its threshold, otherwise the most capable configured tier (`hard → medium → easy`). Thresholds default to `0.33` and `0.70`, must be finite numbers in `[0, 1]`, and are exclusive: a score exactly equal to a threshold moves to the next tier. Configure the easy threshold below the medium threshold when using both.
 
-The decision is cached after the first call, so the classifier runs once per conversation. Stickiness is scoped to the lifetime of the `RouterProvider` instance — build a fresh router per conversation to re-evaluate.
-
-When difficulty is unknown (no tier configured for the score, or no user message present), the rule falls back to the most capable configured tier (`hard → medium → easy → outOfDomain`).
+The history is reclassified on each request, allowing the selected model to change as the task evolves. Empty history uses the most capable configured tier without calling the classifier. At least one tier must be configured. Classifier errors propagate to the caller; the router's provider fallback order applies only after a provider has been selected.
 
 #### ContentRule
 

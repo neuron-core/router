@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace NeuronAI\Tests\Router;
 
+use Closure;
 use Generator;
+use InvalidArgumentException;
 use Throwable;
 use NeuronAI\Chat\Enums\SourceType;
 use NeuronAI\Chat\Messages\AssistantMessage;
@@ -23,6 +25,7 @@ use NeuronAI\Providers\AIProviderInterface;
 use NeuronAI\Providers\MessageMapperInterface;
 use NeuronAI\Router\Rules\CallbackRule;
 use NeuronAI\Router\Rules\ContentRule;
+use NeuronAI\Router\Rules\LoadBalancingRule;
 use NeuronAI\Router\Rules\MethodRule;
 use NeuronAI\Router\Rules\RoundRobinRule;
 use NeuronAI\Router\Rules\RoutingRuleInterface;
@@ -33,6 +36,9 @@ use PHPUnit\Framework\TestCase;
 
 class RouterProviderTest extends TestCase
 {
+    /** @var int[] Retry delays recorded by routerRecordingDelays() */
+    protected array $delays = [];
+
     // --- CallbackRule tests ---
 
     public function test_callback_rule_routes_chat_to_correct_provider(): void
@@ -423,6 +429,7 @@ class RouterProviderTest extends TestCase
         $this->assertInstanceOf(RoutingRuleInterface::class, new MethodRule('a'));
         $this->assertInstanceOf(RoutingRuleInterface::class, new RoundRobinRule(['a', 'b']));
         $this->assertInstanceOf(RoutingRuleInterface::class, new ContentRule('a'));
+        $this->assertInstanceOf(RoutingRuleInterface::class, new LoadBalancingRule(['a', 'b']));
     }
 
     // --- ContentRule tests ---
@@ -600,6 +607,89 @@ class RouterProviderTest extends TestCase
 
         $response4 = $router->systemPrompt(null)->setTools([])->chat(UserMessage::make('hi'));
         $this->assertSame('b2', $response4->getContent());
+    }
+
+    // --- LoadBalancingRule tests ---
+
+    public function test_load_balancing_distributes_by_weight(): void
+    {
+        $providers = ['a' => 30, 'b' => 70];
+
+        $this->assertSame('a', $this->loadBalancingPick($providers, 1));
+        $this->assertSame('a', $this->loadBalancingPick($providers, 30));
+        $this->assertSame('b', $this->loadBalancingPick($providers, 31));
+        $this->assertSame('b', $this->loadBalancingPick($providers, 100));
+    }
+
+    public function test_load_balancing_uses_equal_probability_without_weights(): void
+    {
+        $providers = ['a', 'b', 'c'];
+
+        $this->assertSame('a', $this->loadBalancingPick($providers, 1));
+        $this->assertSame('b', $this->loadBalancingPick($providers, 2));
+        $this->assertSame('c', $this->loadBalancingPick($providers, 3));
+    }
+
+    public function test_load_balancing_draws_from_the_total_weight(): void
+    {
+        // A pick equal to the reported maximum must land on the last provider.
+        $this->assertSame('b', $this->loadBalancingPick(['a' => 30, 'b' => 70], null));
+        $this->assertSame('c', $this->loadBalancingPick(['a', 'b', 'c'], null));
+    }
+
+    public function test_load_balancing_routes_through_router(): void
+    {
+        $router = RouterProvider::make()
+            ->addProvider('a', FakeAIProvider::make(AssistantMessage::make('from-a')))
+            ->addProvider('b', FakeAIProvider::make(AssistantMessage::make('from-b')))
+            ->setRule(new LoadBalancingRule(['b']));
+
+        $this->assertSame('from-b', $router->chat(UserMessage::make('hi'))->getContent());
+    }
+
+    public function test_load_balancing_throws_without_providers(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new LoadBalancingRule([]);
+    }
+
+    public function test_load_balancing_throws_for_non_positive_weight(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new LoadBalancingRule(['a' => 0, 'b' => 100]);
+    }
+
+    public function test_load_balancing_throws_for_non_integer_weight(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        // @phpstan-ignore argument.type
+        new LoadBalancingRule(['a' => 0.3, 'b' => 0.7]);
+    }
+
+    /**
+     * Resolve a provider with a fixed random pick, or with the upper bound of
+     * the random range when $pick is null.
+     *
+     * @param array<int, string>|array<string, int> $providers
+     */
+    protected function loadBalancingPick(array $providers, ?int $pick): string
+    {
+        $rule = new class ($providers, $pick) extends LoadBalancingRule {
+            public function __construct(array $providers, protected ?int $pick)
+            {
+                parent::__construct($providers);
+            }
+
+            protected function random(int $max): int
+            {
+                return $this->pick ?? $max;
+            }
+        };
+
+        return $rule->resolveProvider('chat', [], []);
     }
 
     // --- Fallback tests ---
@@ -875,6 +965,141 @@ class RouterProviderTest extends TestCase
         // The initial request failure now surfaces eagerly when stream() is
         // called (the request must run so it can be caught for fallback).
         $router->systemPrompt(null)->setTools([])->stream(UserMessage::make('hi'));
+    }
+
+    // --- Retry tests ---
+
+    public function test_chat_retries_the_same_provider_before_succeeding(): void
+    {
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->expects($this->exactly(2))->method('chat')->willReturnOnConsecutiveCalls(
+            $this->throwException($this->httpError(429)),
+            AssistantMessage::make('from primary'),
+        );
+        $fallback = $this->createMock(AIProviderInterface::class);
+        $fallback->expects($this->never())->method('chat');
+
+        $router = $this->routerRecordingDelays()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setFallbackOrder('primary', 'fallback')
+            ->setRetry(2, 500);
+
+        $response = $router->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from primary', $response->getContent());
+        $this->assertSame([500], $this->delays);
+    }
+
+    public function test_chat_falls_back_after_retries_are_exhausted(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(503));
+        $primary->expects($this->exactly(3))->method('chat');
+        $fallback = $this->chatReturningMock('from fallback');
+
+        $router = $this->routerRecordingDelays()
+            ->addProvider('primary', $primary)
+            ->addProvider('fallback', $fallback)
+            ->setFallbackOrder('primary', 'fallback')
+            ->setRetry(2, 100);
+
+        $response = $router->chat(UserMessage::make('hi'));
+
+        $this->assertSame('from fallback', $response->getContent());
+        // The delay is fixed by default.
+        $this->assertSame([100, 100], $this->delays);
+    }
+
+    public function test_retry_delay_grows_by_the_multiplier(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(429));
+        $primary->expects($this->exactly(4))->method('chat');
+
+        $router = $this->routerRecordingDelays()
+            ->addProvider('primary', $primary)
+            ->setFallbackOrder('primary')
+            ->setRetry(3, 100, 2);
+
+        try {
+            $router->chat(UserMessage::make('hi'));
+            $this->fail('Expected the last error to propagate.');
+        } catch (HttpException $e) {
+            $this->assertSame(429, $e->response->statusCode);
+        }
+
+        $this->assertSame([100, 200, 400], $this->delays);
+    }
+
+    public function test_non_retryable_error_is_not_retried(): void
+    {
+        $primary = $this->failingProvider('chat', $this->httpError(401));
+        $primary->expects($this->once())->method('chat');
+
+        $router = $this->routerRecordingDelays()
+            ->addProvider('primary', $primary)
+            ->setFallbackOrder('primary')
+            ->setRetry(2, 100);
+
+        try {
+            $router->chat(UserMessage::make('hi'));
+            $this->fail('Expected the error to propagate.');
+        } catch (HttpException $e) {
+            $this->assertSame(401, $e->response->statusCode);
+        }
+
+        $this->assertSame([], $this->delays);
+    }
+
+    public function test_stream_retries_the_initial_request(): void
+    {
+        $primary = $this->createMock(AIProviderInterface::class);
+        $primary->method('systemPrompt')->willReturnSelf();
+        $primary->method('setTools')->willReturnSelf();
+        $primary->expects($this->exactly(2))->method('stream')->willReturnOnConsecutiveCalls(
+            $this->generatorThatThrowsImmediately($this->httpError(429)),
+            $this->generatorThatYieldsNothing(AssistantMessage::make('from primary')),
+        );
+
+        $router = $this->routerRecordingDelays()
+            ->addProvider('primary', $primary)
+            ->setFallbackOrder('primary')
+            ->setRetry(1, 250);
+
+        $stream = $router->stream(UserMessage::make('hi'));
+        foreach ($stream as $chunk) {
+            // No chunks expected.
+        }
+
+        $this->assertSame('from primary', $stream->getReturn()->getContent());
+        $this->assertSame([250], $this->delays);
+    }
+
+    public function test_set_retry_throws_for_invalid_configuration(): void
+    {
+        $this->expectException(ProviderException::class);
+
+        RouterProvider::make()->setRetry(-1, 100);
+    }
+
+    /**
+     * A router that records the retry delays in $this->delays instead of sleeping.
+     */
+    protected function routerRecordingDelays(): RouterProvider
+    {
+        return new class (function (int $milliseconds): void {
+            $this->delays[] = $milliseconds;
+        }) extends RouterProvider {
+            public function __construct(protected Closure $onSleep)
+            {
+            }
+
+            protected function sleep(int $milliseconds): void
+            {
+                ($this->onSleep)($milliseconds);
+            }
+        };
     }
 
     // --- Fallback test helpers ---

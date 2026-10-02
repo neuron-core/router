@@ -25,6 +25,8 @@ use function array_keys;
 use function in_array;
 use function array_key_last;
 use function array_values;
+use function round;
+use function usleep;
 
 class RouterProvider implements AIProviderInterface
 {
@@ -46,6 +48,22 @@ class RouterProvider implements AIProviderInterface
      *     provider's error should trigger a fallback, or null to use the default.
      */
     protected ?Closure $fallbackStrategy = null;
+
+    /**
+     * @var int Times a provider is retried after a retryable error, before
+     *     moving to the next one. Zero by default (no retry).
+     */
+    protected int $retryTimes = 0;
+
+    /**
+     * @var int Milliseconds to wait before the first retry.
+     */
+    protected int $retryBackoff = 0;
+
+    /**
+     * @var float Factor applied to the wait time after each retry.
+     */
+    protected float $retryMultiplier = 1;
 
     protected RoutingRuleInterface $rule;
 
@@ -125,6 +143,30 @@ class RouterProvider implements AIProviderInterface
         return $this;
     }
 
+    /**
+     * Retry a provider that fails with a retryable error before moving to the
+     * next one. The same errors that trigger a fallback trigger a retry.
+     *
+     * @param int $times Retries per provider, after the first attempt.
+     * @param int $backoff Milliseconds to wait before the first retry.
+     * @param float $multiplier Factor applied to the wait time after each retry.
+     *     The default of 1 keeps it fixed, 2 doubles it every time.
+     *
+     * @throws ProviderException
+     */
+    public function setRetry(int $times, int $backoff, float $multiplier = 1): self
+    {
+        if ($times < 0 || $backoff < 0 || $multiplier < 1) {
+            throw new ProviderException(
+                'RouterProvider: retry times and backoff must not be negative, and the multiplier must be at least 1.',
+            );
+        }
+        $this->retryTimes = $times;
+        $this->retryBackoff = $backoff;
+        $this->retryMultiplier = $multiplier;
+        return $this;
+    }
+
     public function systemPrompt(SystemMessage|string|null $prompt): AIProviderInterface
     {
         $this->systemPrompt = $prompt;
@@ -162,27 +204,33 @@ class RouterProvider implements AIProviderInterface
         foreach ($candidates as $index => $name) {
             $isLast = $index === array_key_last($candidates);
             $this->resolvedProvider = $this->providers[$name];
-            $generator = $this->prepare($name)->stream(...$messages);
 
-            // Drive the initial request explicitly. A failure here (quota, auth,
-            // 5xx, timeout) happens before any chunk is emitted, so we can fall
-            // back to the next provider.
-            try {
-                $generator->rewind();
-            } catch (Throwable $e) {
-                if (!$this->canFallback($e) || $isLast) {
-                    throw $e;
+            for ($attempt = 0; ; $attempt++) {
+                $generator = $this->prepare($name)->stream(...$messages);
+
+                // Drive the initial request explicitly. A failure here (quota, auth,
+                // 5xx, timeout) happens before any chunk is emitted, so we can retry
+                // or fall back to the next provider.
+                try {
+                    $generator->rewind();
+                } catch (Throwable $e) {
+                    if ($this->retry($e, $attempt)) {
+                        continue;
+                    }
+                    if ($isLast) {
+                        throw $e;
+                    }
+                    break;
                 }
-                continue;
-            }
 
-            // The initial request succeeded. rewind() above may already have
-            // consumed the generator completely: a turn that ends without
-            // emitting a chunk (e.g. a tool-only response) closes the generator,
-            // and PHP forbids traversing it again. Hand the caller a fresh
-            // generator replaying the primed one instead. Any failure from here
-            // is mid-stream and propagates as-is.
-            return $this->replay($generator);
+                // The initial request succeeded. rewind() above may already have
+                // consumed the generator completely: a turn that ends without
+                // emitting a chunk (e.g. a tool-only response) closes the generator,
+                // and PHP forbids traversing it again. Hand the caller a fresh
+                // generator replaying the primed one instead. Any failure from here
+                // is mid-stream and propagates as-is.
+                return $this->replay($generator);
+            }
         }
 
         // Unreachable: candidates() always returns at least the primary, so the
@@ -307,11 +355,17 @@ class RouterProvider implements AIProviderInterface
             $isLast = $index === array_key_last($candidates);
             $this->resolvedProvider = $this->providers[$name];
 
-            try {
-                return $callback($this->prepare($name));
-            } catch (Throwable $e) {
-                if (!$this->canFallback($e) || $isLast) {
-                    throw $e;
+            for ($attempt = 0; ; $attempt++) {
+                try {
+                    return $callback($this->prepare($name));
+                } catch (Throwable $e) {
+                    if ($this->retry($e, $attempt)) {
+                        continue;
+                    }
+                    if ($isLast) {
+                        throw $e;
+                    }
+                    break;
                 }
             }
         }
@@ -326,6 +380,35 @@ class RouterProvider implements AIProviderInterface
         return $this->providers[$name]
             ->systemPrompt($this->systemPrompt)
             ->setTools($this->tools);
+    }
+
+    /**
+     * Handle a failed attempt on a provider. Rethrows a non-retryable error,
+     * waits and returns true when the same provider must be tried again, or
+     * returns false once its retries are exhausted.
+     *
+     * @param int $attempt Zero-based attempt that just failed.
+     *
+     * @throws Throwable
+     */
+    protected function retry(Throwable $e, int $attempt): bool
+    {
+        if (!$this->canFallback($e)) {
+            throw $e;
+        }
+
+        if ($attempt >= $this->retryTimes) {
+            return false;
+        }
+
+        $this->sleep((int) round($this->retryBackoff * $this->retryMultiplier ** $attempt));
+
+        return true;
+    }
+
+    protected function sleep(int $milliseconds): void
+    {
+        usleep($milliseconds * 1000);
     }
 
     /**

@@ -69,7 +69,7 @@ RouterProvider::make()
     ->addProvider('anthropic', new Anthropic(...))
     ->addProvider('openai', new OpenAI(...))
     ->setDefaultProvider('anthropic')
-    ->setRule(new RoundRobinRule(['anthropic', 'openai']));
+    ->setRule(new LoadBalancingRule(['anthropic', 'openai']));
 ```
 
 The default is overwritten each time the routing rule resolves a provider, so it only acts as the initial fallback.
@@ -89,7 +89,7 @@ RouterProvider::make()
     ->addProvider('anthropic', new Anthropic(...))
     ->addProvider('openai', new OpenAI(...))
     ->addProvider('gemini', new Gemini(...))
-    ->setRule(new RoundRobinRule(['anthropic', 'openai', 'gemini']))
+    ->setRule(new LoadBalancingRule(['anthropic', 'openai', 'gemini']))
     ->setFallbackOrder('anthropic', 'openai', 'gemini');
 ```
 
@@ -120,9 +120,31 @@ $router->setFallbackStrategy(function (Throwable $e): bool {
 
 The strategy takes precedence over the default policy entirely — there is no merging of the two.
 
+### Retry with backoff
+
+By default a failing provider is tried once and the router moves straight to the next one. Use `setRetry()` to retry the same provider first, waiting between attempts:
+
+```php
+RouterProvider::make()
+    ->addProvider('anthropic', new Anthropic(...))
+    ->addProvider('openai', new OpenAI(...))
+    ->setFallbackOrder('anthropic', 'openai')
+    ->setRetry(times: 2, backoff: 500);
+```
+
+| Parameter     | Type    | Description                                                                 |
+|---------------|---------|-----------------------------------------------------------------------------|
+| `$times`      | `int`   | Retries per provider, after the first attempt                               |
+| `$backoff`    | `int`   | Milliseconds to wait before the first retry                                 |
+| `$multiplier` | `float` | Factor applied to the wait time after each retry. Defaults to `1` (fixed)   |
+
+With the default multiplier the wait is the same before every retry. Pass a higher value for exponential backoff: `setRetry(times: 3, backoff: 500, multiplier: 2)` waits 500ms, 1000ms, then 2000ms.
+
+The configuration applies to every provider: each one gets its own `$times` retries before the router moves to the next in the fallback order. Retries are triggered by the same errors that trigger a fallback (including a [custom fallback strategy](#custom-fallback-strategy)), so a non-retryable error is still rethrown immediately. The wait blocks the current process.
+
 ### Streaming
 
-For `stream()`, the fallback applies only to the **initial request** (the one that opens the connection). If that fails with a retryable error, the next provider is tried. Once the first chunk has been emitted the stream cannot restart, so any failure from that point on propagates as-is.
+For `stream()`, retry and fallback apply only to the **initial request** (the one that opens the connection). If that fails with a retryable error, the next provider is tried. Once the first chunk has been emitted the stream cannot restart, so any failure from that point on propagates as-is.
 
 ## Routing Rules
 
@@ -184,18 +206,31 @@ $router->setRule(new CallbackRule(function (string $method, array $messages, arr
 }))
 ```
 
-#### RoundRobinRule
+#### LoadBalancingRule
 
-Distributes requests evenly across providers in sequence. Each call cycles to the next provider:
+Distributes requests across providers at random. Pass a list of provider names to give each one the same probability:
 
 ```php
-use NeuronAI\Router\Rules\RoundRobinRule;
+use NeuronAI\Router\Rules\LoadBalancingRule;
 
-// Alternate between Anthropic and OpenAI for each request
+// Each request has an equal chance of going to Anthropic or OpenAI
 $router->setRule(
-    new RoundRobinRule(['anthropic', 'openai'])
+    new LoadBalancingRule(['anthropic', 'openai'])
 )
 ```
+
+Pass a map of provider name => weight to control the distribution:
+
+```php
+// 30% of the requests to Anthropic, 70% to OpenAI
+$router->setRule(
+    new LoadBalancingRule(['anthropic' => 30, 'openai' => 70])
+)
+```
+
+Weights must be positive integers. They are relative, so they don't have to sum to 100: each provider's share is its weight divided by the sum of all weights. For example, `['anthropic' => 30, 'openai' => 50]` sends 37.5% of the requests to Anthropic and 62.5% to OpenAI. Every request is always routed to exactly one provider.
+
+The provider is picked at random on every request, so the distribution holds over many requests rather than exactly. An empty list or an invalid weight throws `InvalidArgumentException`.
 
 #### DifficultyRule
 
@@ -303,7 +338,7 @@ class MyAgent extends Agent
                 model: 'gpt-4o',
             ))
             ->setRule(
-                new RoundRobinRule(['anthropic', 'openai'])
+                new LoadBalancingRule(['anthropic', 'openai'])
             );
     }
 }

@@ -7,6 +7,9 @@ namespace NeuronAI\Router\Rules;
 use function array_values;
 use function count;
 
+/**
+ * @deprecated Use LoadBalancingRule instead.
+ */
 class RoundRobinRule implements RoutingRuleInterface
 {
     /** @var string[] */

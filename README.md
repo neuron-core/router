@@ -1,5 +1,11 @@
 # Neuron AI Router
 
+> [!IMPORTANT]
+> Get early access to new features, exclusive tutorials, and expert tips for building AI agents in PHP. Join a community of PHP developers pioneering the future of AI development.
+> [Subscribe to the newsletter](https://neuron-ai.dev)
+
+> Before moving on, support the Neuron AI community giving a GitHub star ⭐️. Thank you!
+
 This package provides you with a `RouterProvider` component. It is a proxy that implements `AIProviderInterface` and routes inference calls (`chat`, `stream`, `structured`) to different underlying providers based on a routing strategy you define.
 The agent doesn't know it's talking to a router, it's a drop-in replacement for any Neuron AI provider.
 
